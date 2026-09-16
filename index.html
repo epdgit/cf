@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Constituição Federal do Brasil – Anotada</title>
+  <meta name="description" content="Constituição Federal da República Federativa do Brasil de 1988 com sistema de anotações pessoais." />
+  <link rel="stylesheet" href="styles.css" />
+  <!-- Preload do dado principal -->
+  <link rel="preload" href="constituicao.js" as="script" />
+</head>
+<body>
+
+  <!-- ===== HERO / BANDEIRA ===== -->
+  <header id="hero">
+    <!-- Bandeira do Brasil — SVG inline estilizado -->
+    <div class="bandeira-container">
+      <svg class="bandeira-svg" viewBox="0 0 630 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bandeira do Brasil">
+        <!-- Retângulo verde -->
+        <rect width="630" height="420" fill="#009c3b"/>
+        <!-- Losango amarelo -->
+        <polygon points="315,30 600,210 315,390 30,210" fill="#ffdf00"/>
+        <!-- Círculo azul -->
+        <circle cx="315" cy="210" r="120" fill="#002776"/>
+        <!-- Faixa branca -->
+        <path d="M 195 255 Q 315 195 435 255" fill="none" stroke="white" stroke-width="26"/>
+        <!-- Estrelas — constelação simplificada -->
+        <g fill="white">
+          <!-- Cruzeiro do Sul e estrelas principais -->
+          <polygon points="315,110 320,125 335,125 323,134 327,149 315,141 303,149 307,134 295,125 310,125" transform="scale(0.7) translate(135,50)"/>
+          <circle cx="265" cy="155" r="5"/>
+          <circle cx="295" cy="165" r="4"/>
+          <circle cx="310" cy="148" r="5.5"/>
+          <circle cx="330" cy="172" r="4"/>
+          <circle cx="350" cy="155" r="5"/>
+          <circle cx="370" cy="168" r="3.5"/>
+          <circle cx="250" cy="180" r="3"/>
+          <circle cx="390" cy="152" r="3.5"/>
+          <circle cx="280" cy="195" r="3"/>
+          <circle cx="355" cy="190" r="3"/>
+          <circle cx="320" cy="195" r="3.5"/>
+          <circle cx="240" cy="200" r="3"/>
+          <circle cx="400" cy="188" r="3"/>
+          <circle cx="260" cy="218" r="3"/>
+          <circle cx="375" cy="210" r="3"/>
+          <circle cx="300" cy="225" r="2.5"/>
+          <circle cx="340" cy="222" r="2.5"/>
+          <circle cx="220" cy="215" r="2.5"/>
+          <circle cx="415" cy="205" r="2.5"/>
+          <circle cx="200" cy="240" r="2.5"/>
+          <circle cx="430" cy="230" r="2.5"/>
+        </g>
+        <!-- Texto da faixa -->
+        <text x="315" y="240" text-anchor="middle" font-family="'Arial', sans-serif" font-size="17" font-weight="bold" fill="white" letter-spacing="2" transform="rotate(-10, 315, 230)">ORDEM E PROGRESSO</text>
+        <!-- Borda do retângulo com sombra interna -->
+        <rect width="630" height="420" fill="none" stroke="rgba(0,0,0,0.12)" stroke-width="4"/>
+      </svg>
+    </div>
+
+    <div class="hero-texto">
+      <div class="hero-titulo">CONSTITUIÇÃO DA REPÚBLICA<br>FEDERATIVA DO BRASIL</div>
+      <div class="hero-subtitulo">Promulgada em 5 de outubro de 1988 · Sistema de Anotações Pessoais</div>
+    </div>
+  </header>
+
+  <!-- ===== TOOLBAR ===== -->
+  <nav id="toolbar">
+    <span class="toolbar-logo">CF/88 Anotada</span>
+
+    <div id="usuario-info">
+      👤 Usuário: <span id="usuario-nome">—</span>
+    </div>
+
+    <button class="btn btn-usuario" id="btn-usuario">
+      ⚙️ Trocar usuário
+    </button>
+
+    <button class="btn btn-backup" id="btn-backup">
+      💾 Exportar backup
+    </button>
+
+    <button class="btn btn-importar" id="btn-importar">
+      📂 Importar backup
+    </button>
+
+    <input type="file" id="import-file-input" accept=".json" />
+  </nav>
+
+  <!-- ===== LOADING ===== -->
+  <div id="loading">
+    <div class="spinner"></div>
+    <p style="font-family:var(--fonte-ui);font-size:0.9rem;">Carregando a Constituição Federal...</p>
+  </div>
+
+  <!-- ===== APP PRINCIPAL ===== -->
+  <main id="app" style="display:none;">
+
+    <!-- Índice lateral -->
+    <aside id="indice">
+      <div class="indice-header">📋 Índice</div>
+      <div class="indice-tree" id="indice-tree">
+        <!-- gerado por app.js -->
+      </div>
+    </aside>
+
+    <!-- Conteúdo da CF -->
+    <section id="conteudo">
+      <!-- gerado por app.js -->
+    </section>
+
+  </main>
+
+  <!-- ===== MODAL USUÁRIO ===== -->
+  <div id="modal-usuario">
+    <div class="modal-box">
+      <div class="modal-icone">👤</div>
+      <div class="modal-titulo">Identificação do Usuário</div>
+      <div class="modal-desc">
+        Digite seu nome ou apelido para que suas anotações sejam salvas<br>
+        de forma individual no seu dispositivo.
+      </div>
+      <input
+        type="text"
+        id="modal-usuario-input"
+        class="modal-input"
+        placeholder="Seu nome ou apelido"
+        maxlength="60"
+        autocomplete="off"
+      />
+      <button class="btn-confirmar" id="btn-confirmar-usuario">Confirmar →</button>
+    </div>
+  </div>
+
+  <!-- ===== TOAST ===== -->
+  <div id="toast-container"></div>
+
+  <!-- ===== SCRIPTS ===== -->
+  <!-- Dados da CF — ~570 KB, carregado antes do app -->
+  <script src="constituicao.js"></script>
+  <!-- Lógica da aplicação -->
+  <script src="app.js"></script>
+
+</body>
+</html>
