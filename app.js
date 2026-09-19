@@ -10,6 +10,7 @@ const STORE_CONFIG = 'config';
 let db          = null;
 let currentUser = null;
 let hlsCache    = {};   // { "elementoId::tipoTexto": [{id,start,end,formato,chave}, ...] }
+let currentAnotacoes = {}; // cache das anotações do usuário para lazy render
 
 function abrirDB() {
   return new Promise((resolve, reject) => {
@@ -1655,7 +1656,20 @@ function renderizarCapitulo(cap, container, tituloDomId) {
 
 // ─── Navegação via índice (com offset da toolbar) ────────────────────────────
 function navegarPara(id) {
-  const el = document.getElementById(id);
+  // Se o elemento ainda não existe, pode estar dentro de um título lazy não renderizado.
+  // O ID composto é: tituloId__capId  ou  tituloId__capId__secId
+  let el = document.getElementById(id);
+  if (!el) {
+    const parts = id.split('__');
+    if (parts.length >= 2) {
+      const tituloSection = document.getElementById(parts[0]);
+      if (tituloSection) {
+        const lazyBody = tituloSection.querySelector('.titulo-body-lazy');
+        if (lazyBody) forceRenderTituloBody(lazyBody, tituloSection.id);
+        el = document.getElementById(id);
+      }
+    }
+  }
   if (!el) return;
   const toolbar = document.getElementById('toolbar');
   const offset  = toolbar ? toolbar.getBoundingClientRect().height + 12 : 70;
@@ -1753,6 +1767,23 @@ function renderizarIndice(dados) {
 }
 
 // ─── Renderização geral ───────────────────────────────────────────────────────
+// ─── Lazy render helpers ──────────────────────────────────────────────────────
+function aplicarEstadoAoConteudo() {
+  if (Object.keys(currentAnotacoes).length > 0) preencherCamposDaTela(currentAnotacoes);
+  aplicarSetasNaTela();
+  if (currentUser && Object.keys(hlsCache).length > 0) carregarEAplicarTodosHighlights();
+}
+
+function forceRenderTituloBody(body, tituloId) {
+  if (!body.classList.contains('titulo-body-lazy')) return; // já renderizado
+  body.classList.remove('titulo-body-lazy');
+  const titulo = CF_DATA.titulos.find(t => t.id === tituloId);
+  if (!titulo) return;
+  (titulo.artigos   || []).forEach(art => renderizarArtigo(art, body));
+  (titulo.capitulos || []).forEach(cap => renderizarCapitulo(cap, body, titulo.id));
+  aplicarEstadoAoConteudo();
+}
+
 function renderizarConteudo(dados) {
   const conteudo = document.getElementById('conteudo');
   conteudo.innerHTML = '';
@@ -1779,6 +1810,8 @@ function renderizarConteudo(dados) {
     conteudo.appendChild(preamb);
   }
 
+  // Criar containers dos títulos imediatamente (apenas o cabeçalho);
+  // o corpo é renderizado de forma lazy quando entra no viewport.
   dados.titulos.forEach(titulo => {
     const tDiv = document.createElement('div');
     tDiv.className = 'titulo-section';
@@ -1787,58 +1820,168 @@ function renderizarConteudo(dados) {
       '<div class="titulo-header"><div>' +
       '<div class="titulo-nome">' + titulo.nome + '</div>' +
       (titulo.subtitulo ? '<div class="titulo-subtitulo">' + titulo.subtitulo + '</div>' : '') +
-      '</div></div><div class="titulo-body"></div>';
+      '</div></div><div class="titulo-body titulo-body-lazy"></div>';
     conteudo.appendChild(tDiv);
-
-    const body = tDiv.querySelector('.titulo-body');
-    (titulo.artigos   || []).forEach(art => renderizarArtigo(art, body));
-    (titulo.capitulos || []).forEach(cap => renderizarCapitulo(cap, body, titulo.id));
   });
+
+  // IntersectionObserver: renderiza cada título quando está 800px antes de entrar na tela
+  const lazyObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const body = entry.target;
+      lazyObserver.unobserve(body);
+      const tituloSection = body.closest('.titulo-section');
+      if (tituloSection) forceRenderTituloBody(body, tituloSection.id);
+    });
+  }, { rootMargin: '800px 0px' });
+
+  document.querySelectorAll('.titulo-body-lazy').forEach(el => lazyObserver.observe(el));
 
   const buscaInput = document.getElementById('busca-input');
   document.getElementById('btn-busca-exec').addEventListener('click', () => executarBusca(buscaInput.value));
   buscaInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') executarBusca(buscaInput.value); });
-  document.getElementById('btn-busca-limpar').addEventListener('click', () => { buscaInput.value = ''; limparBusca(); });
+  document.getElementById('btn-busca-limpar').addEventListener('click', fecharPainelBusca);
 }
 
 // ─── Busca ────────────────────────────────────────────────────────────────────
+// Extrai label legível e trecho de contexto para o painel de resultados
+function extrairContextoBusca(el, re) {
+  const artEl = el.closest('.artigo-container, .preambulo-section');
+  let label = '';
+  if (artEl) {
+    const numEl = artEl.querySelector('.artigo-numero');
+    label = numEl ? numEl.textContent.trim() : 'Preâmbulo';
+    const subEl = el.closest('.paragrafo-item, .inciso-item, .subinciso-item, .alinea-item');
+    if (subEl) {
+      const subNum = subEl.querySelector('.paragrafo-numero, .inciso-numero, .subinciso-numero, .alinea-numero');
+      if (subNum) label += ' · ' + subNum.textContent.trim().slice(0, 22);
+    }
+  } else {
+    label = 'Constituição';
+  }
+  const textoBase = el.dataset.textoOriginal || el.textContent;
+  re.lastIndex = 0;
+  const m = re.exec(textoBase);
+  re.lastIndex = 0;
+  let trecho = '';
+  if (m) {
+    const ini = Math.max(0, m.index - 35);
+    const fim = Math.min(textoBase.length, m.index + m[0].length + 65);
+    trecho = (ini > 0 ? '…' : '') +
+             escHtml(textoBase.slice(ini, m.index)) +
+             '<mark>' + escHtml(m[0]) + '</mark>' +
+             escHtml(textoBase.slice(m.index + m[0].length, fim)) +
+             (fim < textoBase.length ? '…' : '');
+  } else {
+    trecho = escHtml(textoBase.slice(0, 120));
+  }
+  return { label, trecho };
+}
+
+let buscaResultadosTotal = 0;
+
+function navegarResultadoBusca(idx) {
+  const mark = document.getElementById('busca-mark-' + idx);
+  if (!mark) return;
+  document.querySelectorAll('.busca-res-item').forEach((it, i) => it.classList.toggle('ativo', i === idx));
+  const toolbar = document.getElementById('toolbar');
+  const offset  = toolbar ? toolbar.getBoundingClientRect().height + 16 : 70;
+  const top     = mark.getBoundingClientRect().top + window.scrollY - offset;
+  window.scrollTo({ top, behavior: 'smooth' });
+}
+
+function fecharPainelBusca() {
+  document.getElementById('app').classList.remove('com-busca');
+  document.getElementById('busca-resultados').innerHTML = '';
+  const inp = document.getElementById('busca-input');
+  if (inp) inp.value = '';
+  limparBusca();
+  buscaResultadosTotal = 0;
+}
+
 function executarBusca(termo) {
   limparBusca();
   const t = termo.trim();
   if (!t) return;
+  // Garantir que todos os títulos lazy estão renderizados antes de buscar
+  document.querySelectorAll('.titulo-body-lazy').forEach(body => {
+    const tituloSection = body.closest('.titulo-section');
+    if (tituloSection) forceRenderTituloBody(body, tituloSection.id);
+  });
   const escapedT = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(escapedT, 'gi');
   const els = document.querySelectorAll(
     '.artigo-texto, .inciso-texto, .paragrafo-texto, .subinciso-texto, .alinea-texto, .preambulo-texto'
   );
-  let n = 0;
+  const resultados = [];
+  let markIdx = 0;
+
   els.forEach(el => {
     const textoBase = el.dataset.textoOriginal || el.textContent;
     re.lastIndex = 0;
     if (!re.test(textoBase)) { re.lastIndex = 0; return; }
     re.lastIndex = 0;
-    // Build HTML by scanning positions in plain text
+    const ctx = extrairContextoBusca(el, re);
+    re.lastIndex = 0;
     let html = '';
     let pos  = 0;
     let m;
     while ((m = re.exec(textoBase)) !== null) {
       html += escHtml(textoBase.slice(pos, m.index));
-      html += '<mark class="highlight">' + escHtml(m[0]) + '</mark>';
+      html += '<mark class="highlight" id="busca-mark-' + markIdx + '">' + escHtml(m[0]) + '</mark>';
+      resultados.push({ label: ctx.label, trecho: ctx.trecho, idx: markIdx });
+      markIdx++;
       pos = m.index + m[0].length;
     }
     html += escHtml(textoBase.slice(pos));
     el.innerHTML = html;
-    n++;
-    if (n === 1) {
-      const target = el.closest('.artigo-container, .preambulo-section');
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
     re.lastIndex = 0;
   });
-  if (n === 0) mostrarToast('Nenhum resultado para "' + t + '"', 'aviso');
-  else mostrarToast(n + ' trecho(s) encontrado(s)', 'sucesso');
-}
 
+  buscaResultadosTotal = resultados.length;
+  const painel = document.getElementById('busca-resultados');
+  painel.innerHTML = '';
+  const app    = document.getElementById('app');
+
+  const header = document.createElement('div');
+  header.className = 'busca-res-header';
+  header.innerHTML =
+    '<span class="busca-res-titulo">🔍 ' +
+    (resultados.length > 0
+      ? resultados.length + ' resultado' + (resultados.length !== 1 ? 's' : '') +
+        ' — <em style="font-weight:400">' + escHtml(t) + '</em>'
+      : 'Sem resultados') +
+    '</span>' +
+    '<button class="busca-res-fechar" id="btn-fechar-busca">✕ Fechar</button>';
+  painel.appendChild(header);
+  painel.querySelector('#btn-fechar-busca').addEventListener('click', fecharPainelBusca);
+
+  if (resultados.length === 0) {
+    const vazio = document.createElement('div');
+    vazio.className = 'busca-res-vazio';
+    vazio.innerHTML = 'Nenhum resultado para<br><strong>"' + escHtml(t) + '"</strong>';
+    painel.appendChild(vazio);
+    app.classList.add('com-busca');
+    mostrarToast('Nenhum resultado para "' + t + '"', 'aviso');
+    return;
+  }
+
+  const lista = document.createElement('div');
+  lista.className = 'busca-res-lista';
+  resultados.forEach(r => {
+    const item = document.createElement('div');
+    item.className = 'busca-res-item';
+    item.innerHTML =
+      '<div class="busca-res-label">' + escHtml(r.label) + '</div>' +
+      '<div class="busca-res-trecho">' + r.trecho + '</div>';
+    item.addEventListener('click', () => navegarResultadoBusca(r.idx));
+    lista.appendChild(item);
+  });
+  painel.appendChild(lista);
+  app.classList.add('com-busca');
+  navegarResultadoBusca(0);
+  mostrarToast(resultados.length + ' resultado(s) encontrado(s)', 'sucesso');
+}
 function limparBusca() {
   // Restore all text elements from their stored original text + user highlights
   document.querySelectorAll('[data-texto-original]').forEach(el => {
@@ -1872,6 +2015,7 @@ async function init() {
     currentUser = usuarioSalvo;
     document.getElementById('usuario-nome').textContent = usuarioSalvo;
     const anotacoes = await carregarTodasAnotacoes(currentUser);
+    currentAnotacoes = anotacoes;
     await carregarTodasCores(currentUser);
     preencherCamposDaTela(anotacoes);
     await carregarSetas();
