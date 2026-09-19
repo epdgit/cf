@@ -639,16 +639,17 @@ body {
   border-color: #ccc;
 }
 
-/* Botão de toggle — campo COM CONTEÚDO */
+/* Botão de toggle — campo COM CONTEÚDO (quase tão discreto quanto "Anotar") */
 .anotacao-wrapper.tem-conteudo .btn-toggle-anotacao {
-  background: #fff8e1;
-  color: #c06000;
-  border: 1px solid #ffc107;
-  font-weight: 700;
+  background: transparent;
+  color: #bbb;
+  border: 1px dashed #ddd;
+  font-weight: 500;
 }
 .anotacao-wrapper.tem-conteudo .btn-toggle-anotacao:hover {
-  background: #fff3cd;
-  color: #a04000;
+  background: #f5f5f5;
+  color: #888;
+  border-color: #ccc;
 }
 
 /* Cabeçalho interno do campo expandido */
@@ -1306,3 +1307,98 @@ body {
   display: flex;
   gap: 6px;
 }
+
+/* ===== SETA MARCADORA ===== */
+.btn-seta-marca {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 2px solid #ccc;
+  border-radius: 50%;
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  font-size: 0.65em;
+  line-height: 1;
+  color: #bbb;
+  padding: 0;
+  margin-right: 5px;
+  vertical-align: middle;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  flex-shrink: 0;
+  user-select: none;
+}
+.btn-seta-marca .seta-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 1px;
+}
+.btn-seta-marca:hover {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+.btn-seta-marca.marcada {
+  background: #e74c3c;
+  border-color: #e74c3c;
+  color: #fff;
+}
+
+/* Garantir que a seta fique inline com o texto do item */
+.artigo-body > .btn-seta-marca,
+.paragrafo-item > .btn-seta-marca,
+.inciso-item > .btn-seta-marca,
+.subinciso-item > .btn-seta-marca,
+.alinea-item > .btn-seta-marca {
+  float: left;
+  margin-top: 3px;
+}
+
+/* ===== PREVIEW DE ANOTAÇÃO (visível acima do botão Anotar) ===== */
+.anotacao-preview {
+  display: none;
+  font-style: italic;
+  padding: 4px 0 4px 8px;
+  border-left: 3px solid currentColor;
+  margin-bottom: 4px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Tamanho de fonte correspondente ao nível do item */
+.artigo-body > .anotacao-wrapper .anotacao-preview      { font-size: 0.97em; }
+.paragrafo-item > .anotacao-wrapper .anotacao-preview   { font-size: 0.94em; }
+.inciso-item > .anotacao-wrapper .anotacao-preview      { font-size: 0.91em; }
+.subinciso-item > .anotacao-wrapper .anotacao-preview   { font-size: 0.91em; }
+.alinea-item > .anotacao-wrapper .anotacao-preview      { font-size: 0.89em; }
+
+/* ===== SELETOR DE COR DA NOTA (dentro do painel expandido) ===== */
+.nota-cor-selector {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  flex-wrap: wrap;
+}
+.anotacao-expanded .nota-cor-selector {
+  display: flex;
+}
+.nota-cor-label {
+  font-size: 0.75rem;
+  color: #888;
+  font-family: var(--fonte-ui);
+}
+.nota-cor-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.nota-cor-btn:hover { transform: scale(1.2); }
+.nota-cor-btn.ativa { border-color: #333; transform: scale(1.15); }

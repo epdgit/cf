@@ -3,9 +3,10 @@
 
 // ─── IndexedDB ───────────────────────────────────────────────────────────────
 const DB_NAME    = 'CF_Anotacoes';
-const DB_VERSION = 2;
-const STORE_NAME = 'anotacoes';
-const STORE_HL   = 'highlights';
+const DB_VERSION = 3;
+const STORE_NAME   = 'anotacoes';
+const STORE_HL     = 'highlights';
+const STORE_CONFIG = 'config';
 let db          = null;
 let currentUser = null;
 let hlsCache    = {};   // { "elementoId::tipoTexto": [{id,start,end,formato,chave}, ...] }
@@ -21,9 +22,53 @@ function abrirDB() {
       if (!d.objectStoreNames.contains(STORE_HL)) {
         d.createObjectStore(STORE_HL, { keyPath: 'chave' });
       }
+      if (!d.objectStoreNames.contains(STORE_CONFIG)) {
+        d.createObjectStore(STORE_CONFIG, { keyPath: 'chave' });
+      }
     };
     req.onsuccess = (e) => { db = e.target.result; resolve(db); };
     req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+// ─── Config DB (helpers genéricos) ───────────────────────────────────────────
+function idbGet(chave) {
+  if (!db) return Promise.resolve(null);
+  return new Promise((res, rej) => {
+    const req = db.transaction(STORE_CONFIG, 'readonly').objectStore(STORE_CONFIG).get(chave);
+    req.onsuccess = (e) => res(e.target.result ? e.target.result.valor : null);
+    req.onerror   = (e) => rej(e.target.error);
+  });
+}
+
+function idbSet(chave, valor) {
+  if (!db) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const req = db.transaction(STORE_CONFIG, 'readwrite').objectStore(STORE_CONFIG).put({ chave, valor });
+    req.onsuccess = () => res();
+    req.onerror   = (e) => rej(e.target.error);
+  });
+}
+
+function idbGetAllByPrefix(prefix) {
+  if (!db) return Promise.resolve([]);
+  return new Promise((res, rej) => {
+    const req = db.transaction(STORE_CONFIG, 'readonly').objectStore(STORE_CONFIG).getAll();
+    req.onsuccess = (e) => res((e.target.result || []).filter(r => r.chave.startsWith(prefix)));
+    req.onerror   = (e) => rej(e.target.error);
+  });
+}
+
+// Cache em memória para cores de nota (populado ao identificar usuário)
+let coresCache = {}; // { elementoId: 'vermelho' | 'verde' | 'azul' }
+
+async function carregarTodasCores(usuario) {
+  coresCache = {};
+  const prefix = 'notacor::' + usuario + '::';
+  const registros = await idbGetAllByPrefix(prefix);
+  registros.forEach(r => {
+    const elementoId = r.chave.slice(prefix.length);
+    coresCache[elementoId] = r.valor;
   });
 }
 
@@ -101,9 +146,19 @@ async function exportarBackup() {
   const dados = {
     usuario: currentUser,
     exportadoEm: new Date().toISOString(),
-    versao: '3.0',
+    versao: '4.0',
     anotacoes,
-    highlights
+    highlights,
+    setas: setasMarcadas,
+    coresNotas: await (async () => {
+      const m = {};
+      try {
+        const prefix = 'notacor::' + currentUser + '::';
+        const registros = await idbGetAllByPrefix(prefix);
+        registros.forEach(r => { m[r.chave.slice(prefix.length)] = r.valor; });
+      } catch(_) {}
+      return m;
+    })()
   };
   const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
@@ -154,6 +209,22 @@ async function processarImportacao(file) {
       await carregarEAplicarTodosHighlights();
     }
 
+    // Importar setas (backup v4)
+    if (dados.setas && typeof dados.setas === 'object') {
+      setasMarcadas = dados.setas;
+      salvarSetas();
+      aplicarSetasNaTela();
+    }
+    // Importar cores de notas (backup v4)
+    if (dados.coresNotas && typeof dados.coresNotas === 'object') {
+      for (const [elementoId, cor] of Object.entries(dados.coresNotas)) {
+        coresCache[elementoId] = cor;
+        await idbSet('notacor::' + currentUser + '::' + elementoId, cor);
+      }
+      // Reaplicar previews de cor na tela
+      preencherCamposDaTela(await carregarTodasAnotacoes(currentUser));
+    }
+
     mostrarToast(`${count} anotações importadas!`, 'sucesso');
   } catch (err) {
     console.error(err);
@@ -175,6 +246,16 @@ function preencherCamposDaTela(anotacoes) {
       wrapper.classList.add('tem-conteudo');
       const btn = wrapper.querySelector('.btn-toggle-anotacao');
       if (btn) btn.innerHTML = '📝 Ver anotação';
+      // Mostrar preview da anotação
+      const cor = carregarCorNota(id);
+      atualizarExibicaoNota(wrapper, texto, cor);
+      // Marcar botão de cor ativo no seletor (que agora fica dentro do painel expandido)
+      const corSel = wrapper.querySelector('.nota-cor-selector');
+      if (corSel) {
+        corSel.querySelectorAll('.nota-cor-btn').forEach(b => {
+          b.classList.toggle('ativa', b.dataset.cor === cor);
+        });
+      }
     }
   });
 }
@@ -206,11 +287,14 @@ async function confirmarUsuario() {
   const nome = document.getElementById('modal-usuario-input').value.trim();
   if (!nome) { mostrarToast('Digite um nome de usuário.', 'aviso'); return; }
   currentUser = nome;
-  localStorage.setItem('cf_usuario', nome);
+  idbSet('usuario', nome).catch(console.error);
   document.getElementById('usuario-nome').textContent = nome;
   fecharModalUsuario();
   const anotacoes = await carregarTodasAnotacoes(currentUser);
+  await carregarTodasCores(currentUser);
   preencherCamposDaTela(anotacoes);
+  await carregarSetas();
+  aplicarSetasNaTela();
   await carregarEAplicarTodosHighlights();
   mostrarToast(`Bem-vindo(a), ${nome}!`, 'sucesso');
 }
@@ -964,10 +1048,39 @@ function atualizarContador(textarea) {
   if (cont) cont.textContent = textarea.value.length + ' / 1000';
 }
 
+// ── Cores de anotação ────────────────────────────────────────
+const CORES_NOTA = { vermelho: '#c0392b', verde: '#1a7a40', azul: '#154b8c' };
+
+function carregarCorNota(elementoId) {
+  return coresCache[elementoId] || 'vermelho';
+}
+function salvarCorNota(elementoId, cor) {
+  coresCache[elementoId] = cor;
+  if (currentUser) idbSet('notacor::' + currentUser + '::' + elementoId, cor).catch(console.error);
+}
+
+function atualizarExibicaoNota(wrapper, texto, cor) {
+  const preview = wrapper.querySelector('.anotacao-preview');
+  if (!preview) return;
+  if (texto && texto.trim()) {
+    preview.textContent = texto;
+    preview.style.color = CORES_NOTA[cor] || CORES_NOTA.vermelho;
+    preview.style.display = 'block';
+  } else {
+    preview.style.display = 'none';
+    preview.textContent = '';
+  }
+}
+
 function criarCampoAnotacao(elementoId, textoLabel) {
   const wrapper = document.createElement('div');
   wrapper.className          = 'anotacao-wrapper collapsed';
   wrapper.dataset.elementoId = elementoId;
+
+  // Preview: anotação visível acima do botão
+  const preview = document.createElement('div');
+  preview.className = 'anotacao-preview';
+  preview.style.display = 'none';
 
   const collapsedDiv = document.createElement('div');
   collapsedDiv.className = 'anotacao-collapsed';
@@ -977,6 +1090,15 @@ function criarCampoAnotacao(elementoId, textoLabel) {
   btnToggle.dataset.elementoId = elementoId;
   btnToggle.innerHTML          = '✏️ Anotar';
   collapsedDiv.appendChild(btnToggle);
+
+  // Seletor de cor (dentro do expandedDiv — criado aqui para uso nos listeners)
+  const corSelector = document.createElement('div');
+  corSelector.className = 'nota-cor-selector';
+  corSelector.innerHTML =
+    '<span class="nota-cor-label">Cor da anotação:</span>' +
+    '<button class="nota-cor-btn" data-cor="vermelho" title="Vermelho" style="background:#c0392b"></button>' +
+    '<button class="nota-cor-btn" data-cor="verde"    title="Verde"    style="background:#1a7a40"></button>' +
+    '<button class="nota-cor-btn" data-cor="azul"     title="Azul"     style="background:#154b8c"></button>';
 
   const expandedDiv = document.createElement('div');
   expandedDiv.className = 'anotacao-expanded';
@@ -991,6 +1113,10 @@ function criarCampoAnotacao(elementoId, textoLabel) {
     '<button class="btn-salvar-nota" data-elemento-id="' + elementoId + '">💾 Salvar</button>' +
     '</div>';
 
+  // Inserir corSelector dentro do expandedDiv (antes do rodapé)
+  expandedDiv.insertBefore(corSelector, expandedDiv.querySelector('.anotacao-rodape'));
+
+  wrapper.appendChild(preview);
   wrapper.appendChild(collapsedDiv);
   wrapper.appendChild(expandedDiv);
 
@@ -998,6 +1124,19 @@ function criarCampoAnotacao(elementoId, textoLabel) {
   const feedback  = expandedDiv.querySelector('.salvo-feedback');
   const btnSalvar = expandedDiv.querySelector('.btn-salvar-nota');
   const btnFechar = expandedDiv.querySelector('.btn-fechar-anotacao');
+
+  // Carregar cor salva
+  let corAtual = carregarCorNota(elementoId);
+  corSelector.querySelectorAll('.nota-cor-btn').forEach(btn => {
+    if (btn.dataset.cor === corAtual) btn.classList.add('ativa');
+    btn.addEventListener('click', () => {
+      corAtual = btn.dataset.cor;
+      salvarCorNota(elementoId, corAtual);
+      corSelector.querySelectorAll('.nota-cor-btn').forEach(b => b.classList.remove('ativa'));
+      btn.classList.add('ativa');
+      atualizarExibicaoNota(wrapper, textarea.value, corAtual);
+    });
+  });
 
   btnToggle.addEventListener('click', () => {
     wrapper.classList.remove('collapsed');
@@ -1008,6 +1147,7 @@ function criarCampoAnotacao(elementoId, textoLabel) {
   btnFechar.addEventListener('click', () => {
     wrapper.classList.remove('expandido');
     wrapper.classList.add('collapsed');
+    atualizarExibicaoNota(wrapper, textarea.value, corAtual);
   });
 
   textarea.addEventListener('input', () => {
@@ -1017,7 +1157,7 @@ function criarCampoAnotacao(elementoId, textoLabel) {
     btnToggle.innerHTML = tem ? '📝 Ver anotação' : '✏️ Anotar';
   });
 
-  btnSalvar.addEventListener('click', async () => {
+  const salvarEAtualizar = async () => {
     if (!currentUser) { mostrarToast('Selecione um usuário antes de salvar.', 'aviso'); return; }
     try {
       await salvarAnotacao(elementoId, textarea.value);
@@ -1026,14 +1166,18 @@ function criarCampoAnotacao(elementoId, textoLabel) {
       const tem = textarea.value.trim().length > 0;
       wrapper.classList.toggle('tem-conteudo', tem);
       btnToggle.innerHTML = tem ? '📝 Ver anotação' : '✏️ Anotar';
+      atualizarExibicaoNota(wrapper, textarea.value, corAtual);
     } catch (e) {
       mostrarToast('Erro ao salvar anotação.', 'erro');
     }
-  });
+  };
+
+  btnSalvar.addEventListener('click', salvarEAtualizar);
 
   textarea.addEventListener('blur', async () => {
     if (!currentUser || !textarea.value) return;
     try { await salvarAnotacao(elementoId, textarea.value); } catch (_) {}
+    atualizarExibicaoNota(wrapper, textarea.value, corAtual);
   });
 
   return wrapper;
@@ -1114,6 +1258,52 @@ function aplicarHighlightsAoEl(textEl) {
 // ─── Variáveis de estado do popup de highlight ────────────────────────────────
 let hlPendingRange  = null;
 let hlPendingTextEl = null;
+
+// ── Setas marcadoras ──────────────────────────────────────────
+let setasMarcadas = {}; // { elementoId: true }
+
+async function carregarSetas() {
+  if (!currentUser) return;
+  try {
+    const val = await idbGet('setas::' + currentUser);
+    setasMarcadas = val && typeof val === 'object' ? val : {};
+  } catch(_) { setasMarcadas = {}; }
+}
+
+function salvarSetas() {
+  if (!currentUser) return;
+  idbSet('setas::' + currentUser, setasMarcadas).catch(console.error);
+}
+
+function criarBotaoSeta(elementoId) {
+  const btn = document.createElement('button');
+  btn.className = 'btn-seta-marca';
+  btn.title = 'Marcar / desmarcar';
+  btn.setAttribute('aria-label', 'Marcar este item');
+  btn.dataset.elementoId = elementoId;
+  btn.innerHTML = '<span class="seta-icon">&#9654;</span>';
+  if (setasMarcadas[elementoId]) btn.classList.add('marcada');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (setasMarcadas[elementoId]) {
+      delete setasMarcadas[elementoId];
+      btn.classList.remove('marcada');
+    } else {
+      setasMarcadas[elementoId] = true;
+      btn.classList.add('marcada');
+    }
+    salvarSetas();
+  });
+  return btn;
+}
+
+function aplicarSetasNaTela() {
+  document.querySelectorAll('.btn-seta-marca').forEach(btn => {
+    const id = btn.dataset.elementoId;
+    if (setasMarcadas[id]) btn.classList.add('marcada');
+    else btn.classList.remove('marcada');
+  });
+}
 
 function adicionarHighlight(formato) {
   if (!currentUser) { mostrarToast('Selecione um usuário antes de marcar.', 'aviso'); return; }
@@ -1307,6 +1497,7 @@ function renderizarAlinea(alinea, container, label) {
   const el = document.createElement('div');
   el.className = 'alinea-item';
   el.id        = alinea.id;
+  el.appendChild(criarBotaoSeta(alinea.id));
   el.appendChild(criarTextDiv('alinea-texto', alinea.texto, alinea.id));
   const refs = criarSecaoReferencias(alinea.id);
   if (refs) el.appendChild(refs);
@@ -1319,6 +1510,7 @@ function renderizarSubinciso(sub, container, artNumStr) {
   el.className = 'subinciso-item';
   el.id        = sub.id;
   const mNum = sub.texto.match(/^([IVXLCDM]+)\s*[-–]/);
+  el.appendChild(criarBotaoSeta(sub.id));
   el.appendChild(criarTextDiv('subinciso-texto', sub.texto, sub.id));
   const refs = criarSecaoReferencias(sub.id);
   if (refs) el.appendChild(refs);
@@ -1340,6 +1532,7 @@ function renderizarInciso(inc, container, numStr) {
   incItem.className = 'inciso-item';
   incItem.id        = inc.id;
   const mInc = inc.texto.match(/^([IVXLCDM]+)\s*[-–]/);
+  incItem.appendChild(criarBotaoSeta(inc.id));
   incItem.appendChild(criarTextDiv('inciso-texto', inc.texto, inc.id));
   const refs = criarSecaoReferencias(inc.id);
   if (refs) incItem.appendChild(refs);
@@ -1361,6 +1554,7 @@ function renderizarParagrafo(par, container, numStr) {
   parItem.className = 'paragrafo-item';
   parItem.id        = par.id;
   const mPar = par.texto.match(/^(§\s*[\d\-A-Za-z]+[ºo°]?[\-A-Za-z]*|Parágrafo único)/);
+  parItem.appendChild(criarBotaoSeta(par.id));
   parItem.appendChild(criarTextDiv('paragrafo-texto', par.texto, par.id));
   const refs = criarSecaoReferencias(par.id);
   if (refs) parItem.appendChild(refs);
@@ -1404,6 +1598,7 @@ function renderizarArtigo(artigo, container) {
   const body = artDiv.querySelector('.artigo-body');
 
   // Caput com dataset para highlighting
+  body.appendChild(criarBotaoSeta(artigo.id));
   body.appendChild(criarTextDiv('artigo-texto', artigo.texto, artigo.id));
 
   // Referências e anotação do artigo — logo após o caput
@@ -1430,10 +1625,10 @@ function renderizarArtigo(artigo, container) {
   container.appendChild(artDiv);
 }
 
-function renderizarSecao(sec, container) {
+function renderizarSecao(sec, container, capDomId) {
   const secDiv = document.createElement('div');
   secDiv.className = 'sec-section';
-  secDiv.id        = sec.id;
+  secDiv.id        = capDomId ? capDomId + '__' + sec.id : sec.id;
   secDiv.innerHTML =
     '<div class="sec-header"><div class="sec-numero">' + (sec.numero || '') + '</div>' +
     '<div class="sec-nome">' + sec.nome + '</div>' +
@@ -1443,10 +1638,11 @@ function renderizarSecao(sec, container) {
   container.appendChild(secDiv);
 }
 
-function renderizarCapitulo(cap, container) {
+function renderizarCapitulo(cap, container, tituloDomId) {
   const capDiv = document.createElement('div');
   capDiv.className = 'cap-section';
-  capDiv.id        = cap.id;
+  const capDomId = tituloDomId ? tituloDomId + '__' + cap.id : cap.id;
+  capDiv.id        = capDomId;
   capDiv.innerHTML =
     '<div class="cap-header"><div class="cap-nome">' + cap.nome + '</div>' +
     (cap.subtitulo ? '<div class="cap-subtitulo">' + cap.subtitulo + '</div>' : '') +
@@ -1454,7 +1650,17 @@ function renderizarCapitulo(cap, container) {
   container.appendChild(capDiv);
   const body = capDiv.querySelector('.cap-body');
   (cap.artigos || []).forEach(art => renderizarArtigo(art, body));
-  (cap.secoes  || []).forEach(sec => renderizarSecao(sec, body));
+  (cap.secoes  || []).forEach(sec => renderizarSecao(sec, body, capDomId));
+}
+
+// ─── Navegação via índice (com offset da toolbar) ────────────────────────────
+function navegarPara(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const toolbar = document.getElementById('toolbar');
+  const offset  = toolbar ? toolbar.getBoundingClientRect().height + 12 : 70;
+  const top     = el.getBoundingClientRect().top + window.scrollY - offset;
+  window.scrollTo({ top, behavior: 'smooth' });
 }
 
 // ─── Índice ───────────────────────────────────────────────────────────────────
@@ -1465,6 +1671,7 @@ function renderizarIndice(dados) {
   const preamb = document.createElement('div');
   preamb.className = 'indice-titulo-row';
   preamb.innerHTML = '<span class="indice-seta"></span><a href="#preambulo" class="indice-titulo-link" style="font-weight:400;font-style:italic;">Preâmbulo</a>';
+  preamb.querySelector('a').addEventListener('click', (e) => { e.preventDefault(); navegarPara('preambulo'); });
   tree.appendChild(preamb);
 
   dados.titulos.forEach(titulo => {
@@ -1476,10 +1683,11 @@ function renderizarIndice(dados) {
     row.className = 'indice-titulo-row';
     row.innerHTML =
       '<span class="indice-seta">' + (temFilhos ? '▶' : '') + '</span>' +
-      '<a href="#' + titulo.id + '" class="indice-titulo-link" onclick="event.stopPropagation()">' +
+      '<a href="#' + titulo.id + '" class="indice-titulo-link" data-navid="' + titulo.id + '">' +
       titulo.nome +
       (titulo.subtitulo ? ' <span class="indice-titulo-nome">' + titulo.subtitulo + '</span>' : '') +
       '</a>';
+    { const lnk = row.querySelector('.indice-titulo-link'); if(lnk) lnk.addEventListener('click',(e)=>{e.preventDefault();e.stopPropagation();navegarPara(lnk.dataset.navid);}); }
 
     const capList = document.createElement('div');
     capList.className = 'indice-cap-list';
@@ -1496,15 +1704,17 @@ function renderizarIndice(dados) {
         const capItem = document.createElement('div');
         capItem.className = 'indice-cap-item';
         const temSec = (cap.secoes || []).length > 0;
+        const capDomId = titulo.id + '__' + cap.id;
 
         const capRow = document.createElement('div');
         capRow.className = 'indice-cap-row';
         capRow.innerHTML =
           '<span class="indice-seta">' + (temSec ? '▶' : '') + '</span>' +
-          '<a href="#' + cap.id + '" class="indice-cap-link" onclick="event.stopPropagation()">' +
+          '<a href="#' + capDomId + '" class="indice-cap-link" data-navid="' + capDomId + '">' +
           cap.nome +
           (cap.subtitulo ? ' <span class="indice-cap-nome">' + cap.subtitulo + '</span>' : '') +
           '</a>';
+        { const lnk = capRow.querySelector('.indice-cap-link'); if(lnk) lnk.addEventListener('click',(e)=>{e.preventDefault();e.stopPropagation();navegarPara(lnk.dataset.navid);}); }
 
         const secList = document.createElement('div');
         secList.className = 'indice-sec-list';
@@ -1519,11 +1729,13 @@ function renderizarIndice(dados) {
           (cap.secoes || []).forEach(sec => {
             const secRow = document.createElement('div');
             secRow.className = 'indice-sec-row';
+            const secDomId = titulo.id + '__' + cap.id + '__' + sec.id;
             secRow.innerHTML =
-              '<a href="#' + sec.id + '" class="indice-sec-link" onclick="event.stopPropagation()">' +
+              '<a href="#' + secDomId + '" class="indice-sec-link" data-navid="' + secDomId + '">' +
               sec.nome +
               (sec.subtitulo ? ' <span class="indice-sec-nome">' + sec.subtitulo + '</span>' : '') +
               '</a>';
+            { const lnk = secRow.querySelector('.indice-sec-link'); if(lnk) lnk.addEventListener('click',(e)=>{e.preventDefault();e.stopPropagation();navegarPara(lnk.dataset.navid);}); }
             secList.appendChild(secRow);
           });
         }
@@ -1580,7 +1792,7 @@ function renderizarConteudo(dados) {
 
     const body = tDiv.querySelector('.titulo-body');
     (titulo.artigos   || []).forEach(art => renderizarArtigo(art, body));
-    (titulo.capitulos || []).forEach(cap => renderizarCapitulo(cap, body));
+    (titulo.capitulos || []).forEach(cap => renderizarCapitulo(cap, body, titulo.id));
   });
 
   const buscaInput = document.getElementById('busca-input');
@@ -1655,12 +1867,15 @@ async function init() {
   setupTooltip();
   setupSelecaoHighlight();
 
-  const usuarioSalvo = localStorage.getItem('cf_usuario');
+  const usuarioSalvo = await idbGet('usuario');
   if (usuarioSalvo) {
     currentUser = usuarioSalvo;
     document.getElementById('usuario-nome').textContent = usuarioSalvo;
     const anotacoes = await carregarTodasAnotacoes(currentUser);
+    await carregarTodasCores(currentUser);
     preencherCamposDaTela(anotacoes);
+    await carregarSetas();
+    aplicarSetasNaTela();
     await carregarEAplicarTodosHighlights();
     mostrarToast('Olá, ' + usuarioSalvo + '! Anotações carregadas.', 'sucesso');
   } else {
